@@ -1,3 +1,5 @@
+if (getRversion() >= "2.15.1") utils::globalVariables(c("State","Cluster","ID","OptimalState"))
+
 #' Subtype-aware temporal registration via spline-coefficient clustering
 #'
 #' @param data data.frame with columns ID, Feature, Time, Value
@@ -13,34 +15,8 @@
 #' @return data.frame with registered Time within [tmin, tmax]
 #' @import dplyr
 #' @importFrom cluster pam silhouette
+#' @importFrom stats setNames
 #' @export
-#' @examples
-#' set.seed(1)
-#' toy <- do.call(rbind, lapply(1:6, function(id) {
-#'   t <- 0:10
-#'   data.frame(ID = id, Feature = "X", Time = t,
-#'              Value = sin(t/3) + rnorm(length(t), sd = 0.1))
-#' }))
-#'
-#' out <- SubtypeAware_Registration(
-#'   data = toy,
-#'   alpha = 0.95,
-#'   k_range = 2:4,
-#'   timepos_option = c(-1,0,1),
-#'   tau = 0.45,
-#'   tmin = 0, tmax = 10,
-#'   knots = c(3,7),
-#'   degree = 3,
-#'   lambda = 1e-7
-#' )
-#' head(out)
-#'
-#' \donttest{
-#' out2 <- SubtypeAware_Registration(
-#'   data = toy, alpha = 0.9, k_range = 2:5, timepos_option = c(-2,-1,0,1,2),
-#'   tau = 0.45, tmin = 0, tmax = 10, knots = c(3,7), degree = 3, lambda = 1e-7
-#' )
-#' }
 SubtypeAware_Registration <- function(
   data,
   alpha = 0.95,
@@ -77,10 +53,10 @@ SubtypeAware_Registration <- function(
   for (id in ids) {
     df_id <- data[data$ID == id, , drop = FALSE]
     cf0 <- get_coef_one(df_id, shift = NULL)
-    rows[[length(rows) + 1L]] <- c(ID = id, State = "Original", setNames(cf0, coef_names))
+    rows[[length(rows) + 1L]] <- c(ID = id, State = "Original", stats::setNames(cf0, coef_names))
     for (s in timepos_option) {
       cfs <- get_coef_one(df_id, shift = s)
-      rows[[length(rows) + 1L]] <- c(ID = id, State = paste0("Shift ", s), setNames(cfs, coef_names))
+      rows[[length(rows) + 1L]] <- c(ID = id, State = paste0("Shift ", s), stats::setNames(cfs, coef_names))
     }
   }
   all_coef <- as.data.frame(do.call(rbind, rows), stringsAsFactors = FALSE)
@@ -120,7 +96,7 @@ SubtypeAware_Registration <- function(
   optimal_states <- data.frame(ID = base_coef$ID[0], Cluster = integer(0), OptimalState = character(0), MinDistance = numeric(0))
   for (k in seq_len(optimal_k)) {
     repeat {
-      any_update <- False <- FALSE
+      any_update <- FALSE
       sel <- selected_list[[k]]
       center <- colMeans(sel[, num_cols, drop = FALSE], na.rm = TRUE)
       for (i in seq_len(nrow(sel))) {
@@ -212,7 +188,7 @@ SubtypeAware_Registration <- function(
   if (length(remain_ids)) {
     for (pid in remain_ids) {
       all_states_pid <- dplyr::filter(all_coef, ID == pid)
-      best <- None <- NULL
+      best <- NULL
       for (cidx in seq_len(nrow(centers))) {
         center <- as.numeric(centers[cidx, colnames(km_final$medoids), drop = TRUE])
         pick <- pick_best_state(center, all_states_pid)
@@ -226,10 +202,9 @@ SubtypeAware_Registration <- function(
   }
 
   parse_shift <- function(state) {
-  if (identical(state, "Original")) return(0)
-  as.numeric(trimws(sub("^Shift", "", state)))
-}
-
+    if (identical(state, "Original")) return(0)
+    as.numeric(trimws(sub("^Shift", "", state)))
+  }
   shift_map <- setNames(vapply(optimal_states$OptimalState, parse_shift, numeric(1)), optimal_states$ID)
 
   out <- data
