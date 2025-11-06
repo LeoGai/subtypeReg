@@ -9,6 +9,10 @@
 #' @importFrom splines bs
 #' @importFrom glmnet glmnet
 #' @keywords internal
+#' @examples
+#' set.seed(1)
+#' df <- data.frame(ID = 1, Time = 0:10, Value = sin((0:10)/3) + rnorm(11, sd = 0.1))
+#' calculate_bspline_coefficients(df, knots = c(3,7))
 calculate_bspline_coefficients <- function(data, knots, degree = 3, lambda = 1e-7) {
   stopifnot(all(c("Time","Value") %in% names(data)))
   x <- tryCatch(
