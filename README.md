@@ -1,6 +1,6 @@
 # subtypeReg
 
-Temporal registration using B-spline coefficients + PAM clustering.
+Subtype-Aware Registration of Longitudinal Electronic Health Records.
 
 ## Installation
 
