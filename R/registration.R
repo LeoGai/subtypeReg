@@ -226,9 +226,10 @@ SubtypeAware_Registration <- function(
   }
 
   parse_shift <- function(state) {
-    if (identical(state, "Original")) return(0)
-    as.numeric(sub("^Shift\s+", "", state))
-  }
+  if (identical(state, "Original")) return(0)
+  as.numeric(trimws(sub("^Shift", "", state)))
+}
+
   shift_map <- setNames(vapply(optimal_states$OptimalState, parse_shift, numeric(1)), optimal_states$ID)
 
   out <- data
