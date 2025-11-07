@@ -164,63 +164,79 @@ SubtypeAware_Registration <- function(
   }
   data_clustering_adj <- apply_best_back(base_coef, all_coef, optimal_states)
 
-  # optional iterations if initial silhouette not strong
-  iter_count <- 0
-  if (max(sil_vec, na.rm = TRUE) <= tau) {
-    repeat {
-      iter_count <- iter_count + 1
-      sil_vec2 <- numeric(length(k_range))
-      for (i in seq_along(k_range)) {
-        k <- k_range[i]
-        km <- cluster::pam(data_clustering_adj[, num_cols, drop = FALSE], k = k)
-        sil <- cluster::silhouette(km$clustering, stats::dist(data_clustering_adj[, num_cols, drop = FALSE]))
-        sil_vec2[i] <- mean(sil[, "sil_width"])
-      }
-      if (verbose) print(sil_vec2)
+  # ---------------- Legacy-like iteration rule (matches original behavior) ----------------
+  iter_count     <- 0
+  previous_k     <- optimal_k
+  s_old          <- sil_vec
+  max_iterations <- if (max(sil_vec, na.rm = TRUE) > tau) 1L else 100L
 
-      k2 <- k_range[which.max(sil_vec2)]
-      if (k2 == optimal_k || iter_count > 50) break
-      optimal_k <- k2
-      km2 <- cluster::pam(data_clustering_adj[, num_cols, drop = FALSE], k = optimal_k)
-      data_clustering_adj$Cluster <- km2$clustering
+  repeat {
+    iter_count <- iter_count + 1
 
-      selected_list <- list()
-      for (k in seq_len(optimal_k)) {
-        cd <- dplyr::filter(data_clustering_adj, Cluster == k)
-        dists <- sqrt(rowSums((cd[, num_cols, drop = FALSE] - km2$medoids[k, ])^2))
-        thr <- stats::quantile(dists, alpha, na.rm = TRUE)
-        selected_list[[k]] <- cd[dists <= thr, , drop = FALSE]
-      }
-      optimal_states <- optimal_states[0, ]
-      for (k in seq_len(optimal_k)) {
-        repeat {
-          any_update <- FALSE
-          sel <- selected_list[[k]]
-
-          if (!nrow(sel)) { selected_list[[k]] <- sel; break }
-          center <- colMeans(sel[, num_cols, drop = FALSE], na.rm = TRUE)
-          if (any(!is.finite(center))) { selected_list[[k]] <- sel; break }
-
-          for (i in seq_len(nrow(sel))) {
-            pid <- sel$ID[i]
-            all_states_pid <- dplyr::filter(all_coef, ID == pid)
-            pick <- pick_best_state(center, all_states_pid, timepos_option, num_cols)
-            if (sel$State[i] != pick["state"]) {
-              sel$State[i] <- pick["state"]; any_update <- TRUE
-            }
-            optimal_states <- rbind(optimal_states,
-                                    data.frame(ID = pid, Cluster = k,
-                                               OptimalState = as.character(pick["state"]),
-                                               MinDistance = as.numeric(pick["mind"])))
-          }
-          selected_list[[k]] <- sel
-          if (!isTRUE(any_update)) break
-        }
-      }
-      optimal_states <- dplyr::distinct(optimal_states, ID, .keep_all = TRUE)
-      data_clustering_adj <- apply_best_back(data_clustering_adj, all_coef, optimal_states)
+    sil_vec2 <- numeric(length(k_range))
+    for (i in seq_along(k_range)) {
+      k <- k_range[i]
+      km <- cluster::pam(data_clustering_adj[, num_cols, drop = FALSE], k = k)
+      sil <- cluster::silhouette(km$clustering, stats::dist(data_clustering_adj[, num_cols, drop = FALSE]))
+      sil_vec2[i] <- mean(sil[, "sil_width"])
     }
+    if (verbose) print(sil_vec2)
+
+    k2 <- k_range[which.max(sil_vec2)]
+
+    top2_new <- sort(sil_vec2, decreasing = TRUE)[1:2]
+    top2_old <- sort(s_old,     decreasing = TRUE)[1:2]
+    if (k2 == previous_k && all(top2_new <= top2_old)) break
+    if (iter_count >= max_iterations) break
+    if (iter_count > 50) break
+
+    optimal_k  <- k2
+    previous_k <- k2
+    s_old      <- sil_vec2
+
+    km2 <- cluster::pam(data_clustering_adj[, num_cols, drop = FALSE], k = optimal_k)
+    data_clustering_adj$Cluster <- km2$clustering
+
+    # re-select representatives per cluster with updated centers
+    selected_list <- list()
+    for (k in seq_len(optimal_k)) {
+      cd <- dplyr::filter(data_clustering_adj, Cluster == k)
+      dists <- sqrt(rowSums((cd[, num_cols, drop = FALSE] - km2$medoids[k, ])^2))
+      thr <- stats::quantile(dists, alpha, na.rm = TRUE)
+      selected_list[[k]] <- cd[dists <= thr, , drop = FALSE]
+    }
+
+    # re-choose best state for selected points
+    optimal_states <- optimal_states[0, ]
+    for (k in seq_len(optimal_k)) {
+      repeat {
+        any_update <- FALSE
+        sel <- selected_list[[k]]
+
+        if (!nrow(sel)) { selected_list[[k]] <- sel; break }
+        center <- colMeans(sel[, num_cols, drop = FALSE], na.rm = TRUE)
+        if (any(!is.finite(center))) { selected_list[[k]] <- sel; break }
+
+        for (i in seq_len(nrow(sel))) {
+          pid <- sel$ID[i]
+          all_states_pid <- dplyr::filter(all_coef, ID == pid)
+          pick <- pick_best_state(center, all_states_pid, timepos_option, num_cols)
+          if (sel$State[i] != pick["state"]) {
+            sel$State[i] <- pick["state"]; any_update <- TRUE
+          }
+          optimal_states <- rbind(optimal_states,
+                                  data.frame(ID = pid, Cluster = k,
+                                             OptimalState = as.character(pick["state"]),
+                                             MinDistance = as.numeric(pick["mind"])))
+        }
+        selected_list[[k]] <- sel
+        if (!isTRUE(any_update)) break
+      }
+    }
+    optimal_states <- dplyr::distinct(optimal_states, ID, .keep_all = TRUE)
+    data_clustering_adj <- apply_best_back(data_clustering_adj, all_coef, optimal_states)
   }
+  # ---------------- End legacy-like iteration rule ----------------
 
   # final clustering to obtain centers for remaining assignment
   km_final <- cluster::pam(data_clustering_adj[, num_cols, drop = FALSE], k = optimal_k)
