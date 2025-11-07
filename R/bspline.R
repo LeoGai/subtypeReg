@@ -1,60 +1,55 @@
-#' Compute B-spline coefficients (ridge by glmnet, with fallback)
+#' Compute B-spline coefficients using ridge regression (glmnet only)
 #'
 #' @param data A data.frame with columns: ID, Time, Value
-#' @param knots Numeric vector of internal knot positions for splines::bs
-#' @param degree Integer spline degree. Default 3 (cubic).
-#' @param lambda Numeric lambda for glmnet (ridge). Default 1e-7.
+#' @param knots Numeric vector of internal knot positions for splines::bs()
+#' @param degree Integer spline degree. Default is 3 (cubic).
+#' @param lambda Numeric lambda for glmnet (ridge). Default is 1e-7.
+#' @param standardize Logical; passed to glmnet::glmnet(). Default FALSE.
 #'
-#' @return Named numeric vector of coefficients: (Intercept) + bs_* columns.
+#' @return A named numeric vector of coefficients: (Intercept) and bs_1..bs_p.
+#'         If fitting is not possible, returns an NA vector of the same length.
 #' @importFrom splines bs
 #' @importFrom glmnet glmnet
+#' @importFrom stats setNames coef
 #' @keywords internal
-#' @examples
-#' set.seed(1)
-#' df <- data.frame(ID = 1, Time = 0:10, Value = sin((0:10)/3) + rnorm(11, sd = 0.1))
-#' calculate_bspline_coefficients(df, knots = c(3,7))
-calculate_bspline_coefficients <- function(data, knots, degree = 3, lambda = 1e-7) {
+calculate_bspline_coefficients <- function(data, knots, degree = 3, lambda = 1e-7, standardize = FALSE) {
   stopifnot(all(c("Time","Value") %in% names(data)))
+
   x <- tryCatch(
     splines::bs(data$Time, knots = knots, degree = degree, intercept = FALSE),
     error = function(e) NULL
   )
-  if (is.null(x) || nrow(as.matrix(x)) == 0 ||
-      length(data$Value) < (ncol(as.matrix(x)) + 1L)) {
-    p <- if (!is.null(x)) ncol(as.matrix(x)) else 0L
-    nm <- c("(Intercept)", if (p > 0) paste0("bs_", seq_len(p)) else character())
-    out <- rep(NA_real_, length(nm)); names(out) <- nm
-    return(out)
+
+  if (is.null(x)) {
+    nm <- c("(Intercept)")
+    return(stats::setNames(rep(NA_real_, length(nm)), nm))
   }
+
   x <- as.matrix(x)
+  p <- ncol(x)
+  nm <- c("(Intercept)", if (p > 0) paste0("bs_", seq_len(p)) else character())
+
+  if (p == 0 || nrow(x) < 1L || length(data$Value) != nrow(x)) {
+    return(stats::setNames(rep(NA_real_, length(nm)), nm))
+  }
+
   y <- data$Value
 
   fit <- tryCatch(
-    glmnet::glmnet(x, y, alpha = 0, lambda = lambda, standardize = FALSE),
+    glmnet::glmnet(x, y, alpha = 0, lambda = lambda, standardize = standardize, intercept = TRUE),
     error = function(e) NULL
   )
-  if (!is.null(fit)) {
-    cf <- as.vector(glmnet::coef.glmnet(fit))
-    p <- ncol(x)
-    nm <- c("(Intercept)", paste0("bs_", seq_len(p)))
-    names(cf) <- nm
-    return(cf)
-  } else {
-    X <- cbind(Intercept = 1, x)
-    if (nrow(X) <= ncol(X)) {
-      p <- ncol(X)
-      nm <- colnames(X)
-      out <- rep(NA_real_, p); names(out) <- nm
-      return(out)
-    }
-    cf <- tryCatch(
-      {
-        fit_lm <- .lm_fit_safe(X, y)
-        as.numeric(fit_lm$coefficients)
-      },
-      error = function(e) rep(NA_real_, ncol(X))
-    )
-    names(cf) <- colnames(X)
-    return(cf)
+  if (is.null(fit)) {
+    return(stats::setNames(rep(NA_real_, length(nm)), nm))
   }
+
+  cf <- as.vector(stats::coef(fit))
+
+  if (length(cf) < length(nm)) {
+    cf <- c(cf, rep(NA_real_, length(nm) - length(cf)))
+  } else if (length(cf) > length(nm)) {
+    cf <- cf[seq_along(nm)]
+  }
+  names(cf) <- nm
+  cf
 }
