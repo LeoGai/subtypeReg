@@ -34,6 +34,19 @@ SubtypeAware_Registration <- function(
   n_id <- length(ids)
   k_range <- .valid_k_range(k_range, n_id)
 
+  # ---- order-aware best-state picker (tie-break by caller's timepos_option order) ----
+  pick_best_state <- function(center, df_all_states_one_id, timepos_option) {
+    cols <- c("Coef1","Coef2","Coef3","Coef4","Coef5","Coef6")
+    state_levels <- c("Original", paste("Shift", timepos_option))
+    df_all_states_one_id$State <- factor(df_all_states_one_id$State,
+                                         levels = state_levels, ordered = TRUE)
+    df_all_states_one_id <- df_all_states_one_id[order(df_all_states_one_id$State), , drop = FALSE]
+    m  <- as.matrix(df_all_states_one_id[, cols, drop = FALSE])
+    d2 <- rowSums((m - matrix(center, nrow = nrow(m), ncol = length(center), byrow = TRUE))^2)
+    idx <- which.min(d2)  # order acts as deterministic tie-break
+    c(state = as.character(df_all_states_one_id$State[idx]), mind = d2[idx])
+  }
+
   get_coef_one <- function(df_id, shift = NULL) {
     tmp <- df_id
     if (!is.null(shift)) {
@@ -86,13 +99,6 @@ SubtypeAware_Registration <- function(
     selected_list[[k]] <- cd[dists <= thr, , drop = FALSE]
   }
 
-  pick_best_state <- function(center, df_all_states_one_id) {
-    m <- as.matrix(df_all_states_one_id[, num_cols, drop = FALSE])
-    d2 <- rowSums((m - matrix(center, nrow = nrow(m), ncol = length(center), byrow = TRUE))^2)
-    idx <- which.min(d2)
-    c(state = df_all_states_one_id$State[idx], mind = d2[idx])
-  }
-
   optimal_states <- data.frame(ID = base_coef$ID[0], Cluster = integer(0), OptimalState = character(0), MinDistance = numeric(0))
   for (k in seq_len(optimal_k)) {
     repeat {
@@ -102,7 +108,7 @@ SubtypeAware_Registration <- function(
       for (i in seq_len(nrow(sel))) {
         pid <- sel$ID[i]
         all_states_pid <- dplyr::filter(all_coef, ID == pid)
-        pick <- pick_best_state(center, all_states_pid)
+        pick <- pick_best_state(center, all_states_pid, timepos_option)  # UPDATED
         if (sel$State[i] != pick["state"]) {
           sel$State[i] <- pick["state"]; any_update <- TRUE
         }
@@ -161,7 +167,7 @@ SubtypeAware_Registration <- function(
           for (i in seq_len(nrow(sel))) {
             pid <- sel$ID[i]
             all_states_pid <- dplyr::filter(all_coef, ID == pid)
-            pick <- pick_best_state(center, all_states_pid)
+            pick <- pick_best_state(center, all_states_pid, timepos_option)  # UPDATED
             if (sel$State[i] != pick["state"]) {
               sel$State[i] <- pick["state"]; any_update <- TRUE
             }
@@ -191,7 +197,7 @@ SubtypeAware_Registration <- function(
       best <- NULL
       for (cidx in seq_len(nrow(centers))) {
         center <- as.numeric(centers[cidx, colnames(km_final$medoids), drop = TRUE])
-        pick <- pick_best_state(center, all_states_pid)
+        pick <- pick_best_state(center, all_states_pid, timepos_option)  # UPDATED
         rec <- data.frame(ID = pid, Cluster = cidx,
                           OptimalState = as.character(pick["state"]),
                           MinDistance = as.numeric(pick["mind"]))
@@ -216,3 +222,4 @@ SubtypeAware_Registration <- function(
   rownames(out) <- NULL
   out
 }
+
