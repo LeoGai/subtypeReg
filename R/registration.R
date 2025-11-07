@@ -20,6 +20,7 @@ if (getRversion() >= "2.15.1") utils::globalVariables(c("State","Cluster","ID","
 #' @param knots numeric, internal knots for splines::bs
 #' @param degree integer, spline degree, default 3
 #' @param lambda numeric, glmnet ridge lambda, default 1e-7
+#' @param verbose logical, if TRUE prints silhouette vectors each time they are computed
 #'
 #' @return data.frame with registered Time within [tmin, tmax]
 #' @import dplyr
@@ -36,7 +37,8 @@ SubtypeAware_Registration <- function(
   tmax,
   knots,
   degree = 3,
-  lambda = 1e-7
+  lambda = 1e-7,
+  verbose = FALSE
 ) {
   stopifnot(all(c("ID","Time","Value") %in% names(data)))
   ids <- unique(data$ID)
@@ -51,18 +53,15 @@ SubtypeAware_Registration <- function(
                                          levels = state_levels, ordered = TRUE)
     df_all_states_one_id <- df_all_states_one_id[order(df_all_states_one_id$State), , drop = FALSE]
 
-    # squared Euclidean distance to local center
     m  <- as.matrix(df_all_states_one_id[, cols, drop = FALSE])
     d2 <- rowSums((m - matrix(center, nrow = nrow(m), ncol = length(center), byrow = TRUE))^2)
 
-    # treat bad distances as Inf; if all Inf -> fallback Original
     d2[!is.finite(d2)] <- Inf
     if (all(is.infinite(d2))) {
       return(c(state = "Original", mind = Inf))
     }
 
-    # which.min() respects row order -> order acts as deterministic tie-break
-    idx <- which.min(d2)
+    idx <- which.min(d2)  # order acts as deterministic tie-break
     c(state = as.character(df_all_states_one_id$State[idx]), mind = d2[idx])
   }
 
@@ -71,10 +70,8 @@ SubtypeAware_Registration <- function(
     tmp <- df_id
     if (!is.null(shift)) {
       tmp$Time <- tmp$Time + shift
-      tmp <- tmp[tmp$Time >= tmin & tmp$Time <= tmax, , drop = FALSE]
-    } else {
-      tmp <- tmp[tmp$Time >= tmin & tmp$Time <= tmax, , drop = FALSE]
     }
+    tmp <- tmp[tmp$Time >= tmin & tmp$Time <= tmax, , drop = FALSE]
     calculate_bspline_coefficients(tmp, knots = knots, degree = degree, lambda = lambda)
   }
 
@@ -112,6 +109,8 @@ SubtypeAware_Registration <- function(
     sil <- cluster::silhouette(km$clustering, stats::dist(data_clustering))
     sil_vec[i] <- mean(sil[, "sil_width"])
   }
+  if (verbose) print(sil_vec)
+
   optimal_k <- k_range[which.max(sil_vec)]
   km0 <- cluster::pam(data_clustering, k = optimal_k)
   base_coef$Cluster <- km0$clustering
@@ -132,11 +131,8 @@ SubtypeAware_Registration <- function(
       any_update <- FALSE
       sel <- selected_list[[k]]
 
-      # empty set guard
       if (!nrow(sel)) { selected_list[[k]] <- sel; break }
-
       center <- colMeans(sel[, num_cols, drop = FALSE], na.rm = TRUE)
-      # invalid center guard
       if (any(!is.finite(center))) { selected_list[[k]] <- sel; break }
 
       for (i in seq_len(nrow(sel))) {
@@ -180,6 +176,8 @@ SubtypeAware_Registration <- function(
         sil <- cluster::silhouette(km$clustering, stats::dist(data_clustering_adj[, num_cols, drop = FALSE]))
         sil_vec2[i] <- mean(sil[, "sil_width"])
       }
+      if (verbose) print(sil_vec2)
+
       k2 <- k_range[which.max(sil_vec2)]
       if (k2 == optimal_k || iter_count > 50) break
       optimal_k <- k2
@@ -272,4 +270,5 @@ SubtypeAware_Registration <- function(
   rownames(out) <- NULL
   out
 }
+
 
