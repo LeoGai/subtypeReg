@@ -34,18 +34,20 @@ SubtypeAware_Registration <- function(
   n_id <- length(ids)
   k_range <- .valid_k_range(k_range, n_id)
 
-  # ---- order-aware best-state picker (tie-break by caller's timepos_option order) ----
-  pick_best_state <- function(center, df_all_states_one_id, timepos_option) {
-    cols <- c("Coef1","Coef2","Coef3","Coef4","Coef5","Coef6")
-    state_levels <- c("Original", paste("Shift", timepos_option))
-    df_all_states_one_id$State <- factor(df_all_states_one_id$State,
-                                         levels = state_levels, ordered = TRUE)
-    df_all_states_one_id <- df_all_states_one_id[order(df_all_states_one_id$State), , drop = FALSE]
-    m  <- as.matrix(df_all_states_one_id[, cols, drop = FALSE])
-    d2 <- rowSums((m - matrix(center, nrow = nrow(m), ncol = length(center), byrow = TRUE))^2)
-    idx <- which.min(d2)  # order acts as deterministic tie-break
-    c(state = as.character(df_all_states_one_id$State[idx]), mind = d2[idx])
-  }
+ pick_best_state <- function(center, df_all_states_one_id, timepos_option) {
+  
+  cols <- num_cols
+  state_levels <- c("Original", paste("Shift", timepos_option))
+  df_all_states_one_id$State <- factor(df_all_states_one_id$State,
+                                       levels = state_levels, ordered = TRUE)
+  df_all_states_one_id <- df_all_states_one_id[order(df_all_states_one_id$State), , drop = FALSE]
+  m  <- as.matrix(df_all_states_one_id[, cols, drop = FALSE])
+  d2 <- rowSums((m - matrix(center, nrow = nrow(m), ncol = length(center), byrow = TRUE))^2)
+
+  # which.min() respects row order -> order acts as deterministic tie-break
+  idx <- which.min(d2)
+  c(state = as.character(df_all_states_one_id$State[idx]), mind = d2[idx])
+}
 
   get_coef_one <- function(df_id, shift = NULL) {
     tmp <- df_id
