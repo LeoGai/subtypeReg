@@ -4,7 +4,7 @@
 #' @param knots Numeric vector of internal knot positions for splines::bs()
 #' @param degree Integer spline degree. Default is 3 (cubic).
 #' @param lambda Numeric lambda for glmnet (ridge). Default is 1e-7.
-#' @param standardize Logical; passed to glmnet::glmnet(). Default FALSE.
+#' @param standardize Logical; passed to glmnet::glmnet(). Default TRUE.
 #'
 #' @return A named numeric vector of coefficients: (Intercept) and bs_1..bs_p.
 #'         If fitting is not possible, returns an NA vector of the same length.
@@ -12,7 +12,7 @@
 #' @importFrom glmnet glmnet
 #' @importFrom stats setNames coef
 #' @keywords internal
-calculate_bspline_coefficients <- function(data, knots, degree = 3, lambda = 1e-7, standardize = FALSE) {
+calculate_bspline_coefficients <- function(data, knots, degree = 3, lambda = 1e-7, standardize = TRUE) {
   stopifnot(all(c("Time","Value") %in% names(data)))
 
   x <- tryCatch(
