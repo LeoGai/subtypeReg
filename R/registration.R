@@ -1,5 +1,14 @@
 if (getRversion() >= "2.15.1") utils::globalVariables(c("State","Cluster","ID","OptimalState"))
 
+# internal: validate k_range against number of IDs
+.valid_k_range <- function(k_range, n_id) {
+  k_range <- unique(as.integer(k_range))
+  k_range <- k_range[!is.na(k_range) & k_range >= 2]
+  if (length(k_range) == 0L) k_range <- 2L
+  k_max <- max(2L, n_id - 1L)
+  k_range[k_range <= k_max]
+}
+
 #' Subtype-aware temporal registration via spline-coefficient clustering
 #'
 #' @param data data.frame with columns ID, Feature, Time, Value
@@ -34,36 +43,50 @@ SubtypeAware_Registration <- function(
   n_id <- length(ids)
   k_range <- .valid_k_range(k_range, n_id)
 
- pick_best_state <- function(center, df_all_states_one_id, timepos_option) {
-  
-  cols <- num_cols
-  state_levels <- c("Original", paste("Shift", timepos_option))
-  df_all_states_one_id$State <- factor(df_all_states_one_id$State,
-                                       levels = state_levels, ordered = TRUE)
-  df_all_states_one_id <- df_all_states_one_id[order(df_all_states_one_id$State), , drop = FALSE]
-  m  <- as.matrix(df_all_states_one_id[, cols, drop = FALSE])
-  d2 <- rowSums((m - matrix(center, nrow = nrow(m), ncol = length(center), byrow = TRUE))^2)
+  # order-aware best-state picker (tie-break by caller's timepos_option order)
+  pick_best_state <- function(center, df_all_states_one_id, timepos_option, num_cols) {
+    cols <- num_cols
+    state_levels <- c("Original", paste("Shift", timepos_option))
+    df_all_states_one_id$State <- factor(df_all_states_one_id$State,
+                                         levels = state_levels, ordered = TRUE)
+    df_all_states_one_id <- df_all_states_one_id[order(df_all_states_one_id$State), , drop = FALSE]
 
-  # which.min() respects row order -> order acts as deterministic tie-break
-  idx <- which.min(d2)
-  c(state = as.character(df_all_states_one_id$State[idx]), mind = d2[idx])
-}
+    # squared Euclidean distance to local center
+    m  <- as.matrix(df_all_states_one_id[, cols, drop = FALSE])
+    d2 <- rowSums((m - matrix(center, nrow = nrow(m), ncol = length(center), byrow = TRUE))^2)
 
+    # treat bad distances as Inf; if all Inf -> fallback Original
+    d2[!is.finite(d2)] <- Inf
+    if (all(is.infinite(d2))) {
+      return(c(state = "Original", mind = Inf))
+    }
+
+    # which.min() respects row order -> order acts as deterministic tie-break
+    idx <- which.min(d2)
+    c(state = as.character(df_all_states_one_id$State[idx]), mind = d2[idx])
+  }
+
+  # get coefficients for one ID and optional shift (with windowing)
   get_coef_one <- function(df_id, shift = NULL) {
     tmp <- df_id
     if (!is.null(shift)) {
       tmp$Time <- tmp$Time + shift
       tmp <- tmp[tmp$Time >= tmin & tmp$Time <= tmax, , drop = FALSE]
+    } else {
+      tmp <- tmp[tmp$Time >= tmin & tmp$Time <= tmax, , drop = FALSE]
     }
     calculate_bspline_coefficients(tmp, knots = knots, degree = degree, lambda = lambda)
   }
 
+  # derive coefficient names from a template fit (first ID)
   cf_template <- calculate_bspline_coefficients(
     data[data$ID == ids[1], , drop = FALSE],
     knots = knots, degree = degree, lambda = lambda
   )
   coef_names <- names(cf_template)
+  num_cols <- coef_names
 
+  # build coefficient table for Original and each shift
   rows <- list()
   for (id in ids) {
     df_id <- data[data$ID == id, , drop = FALSE]
@@ -71,17 +94,17 @@ SubtypeAware_Registration <- function(
     rows[[length(rows) + 1L]] <- c(ID = id, State = "Original", stats::setNames(cf0, coef_names))
     for (s in timepos_option) {
       cfs <- get_coef_one(df_id, shift = s)
-      rows[[length(rows) + 1L]] <- c(ID = id, State = paste0("Shift ", s), stats::setNames(cfs, coef_names))
+      rows[[length(rows) + 1L]] <- c(ID = id, State = paste("Shift", s), stats::setNames(cfs, coef_names))
     }
   }
   all_coef <- as.data.frame(do.call(rbind, rows), stringsAsFactors = FALSE)
   all_coef$ID <- if (is.numeric(all_coef$ID)) as.numeric(all_coef$ID) else all_coef$ID
-  num_cols <- coef_names
   all_coef[num_cols] <- lapply(all_coef[num_cols], function(x) as.numeric(x))
 
   base_coef <- dplyr::filter(all_coef, State == "Original")
   data_clustering <- base_coef[, num_cols, drop = FALSE]
 
+  # choose k by average silhouette
   sil_vec <- numeric(length(k_range))
   for (i in seq_along(k_range)) {
     k <- k_range[i]
@@ -93,6 +116,7 @@ SubtypeAware_Registration <- function(
   km0 <- cluster::pam(data_clustering, k = optimal_k)
   base_coef$Cluster <- km0$clustering
 
+  # select representative points per cluster
   selected_list <- list()
   for (k in seq_len(optimal_k)) {
     cd <- dplyr::filter(base_coef, Cluster == k)
@@ -101,16 +125,24 @@ SubtypeAware_Registration <- function(
     selected_list[[k]] <- cd[dists <= thr, , drop = FALSE]
   }
 
+  # initial best-state selection with tie-break by timepos_option
   optimal_states <- data.frame(ID = base_coef$ID[0], Cluster = integer(0), OptimalState = character(0), MinDistance = numeric(0))
   for (k in seq_len(optimal_k)) {
     repeat {
       any_update <- FALSE
       sel <- selected_list[[k]]
+
+      # empty set guard
+      if (!nrow(sel)) { selected_list[[k]] <- sel; break }
+
       center <- colMeans(sel[, num_cols, drop = FALSE], na.rm = TRUE)
+      # invalid center guard
+      if (any(!is.finite(center))) { selected_list[[k]] <- sel; break }
+
       for (i in seq_len(nrow(sel))) {
         pid <- sel$ID[i]
         all_states_pid <- dplyr::filter(all_coef, ID == pid)
-        pick <- pick_best_state(center, all_states_pid, timepos_option)  # UPDATED
+        pick <- pick_best_state(center, all_states_pid, timepos_option, num_cols)
         if (sel$State[i] != pick["state"]) {
           sel$State[i] <- pick["state"]; any_update <- TRUE
         }
@@ -125,6 +157,7 @@ SubtypeAware_Registration <- function(
   }
   optimal_states <- dplyr::distinct(optimal_states, ID, .keep_all = TRUE)
 
+  # apply chosen states back to base coefficients
   apply_best_back <- function(df_base, df_all, opt_map) {
     merged <- dplyr::inner_join(df_all, opt_map[, c("ID","OptimalState")], by = "ID")
     keep <- dplyr::filter(merged, State == OptimalState)
@@ -133,9 +166,9 @@ SubtypeAware_Registration <- function(
     res[row_pos, c(num_cols, "State")] <- keep[, c(num_cols, "State")]
     res
   }
-
   data_clustering_adj <- apply_best_back(base_coef, all_coef, optimal_states)
 
+  # optional iterations if initial silhouette not strong
   iter_count <- 0
   if (max(sil_vec, na.rm = TRUE) <= tau) {
     repeat {
@@ -165,11 +198,15 @@ SubtypeAware_Registration <- function(
         repeat {
           any_update <- FALSE
           sel <- selected_list[[k]]
+
+          if (!nrow(sel)) { selected_list[[k]] <- sel; break }
           center <- colMeans(sel[, num_cols, drop = FALSE], na.rm = TRUE)
+          if (any(!is.finite(center))) { selected_list[[k]] <- sel; break }
+
           for (i in seq_len(nrow(sel))) {
             pid <- sel$ID[i]
             all_states_pid <- dplyr::filter(all_coef, ID == pid)
-            pick <- pick_best_state(center, all_states_pid, timepos_option)  # UPDATED
+            pick <- pick_best_state(center, all_states_pid, timepos_option, num_cols)
             if (sel$State[i] != pick["state"]) {
               sel$State[i] <- pick["state"]; any_update <- TRUE
             }
@@ -187,34 +224,45 @@ SubtypeAware_Registration <- function(
     }
   }
 
+  # final clustering to obtain centers for remaining assignment
   km_final <- cluster::pam(data_clustering_adj[, num_cols, drop = FALSE], k = optimal_k)
   data_clustering_adj$Cluster <- km_final$clustering
   centers <- as.data.frame(km_final$medoids)
   centers$Cluster <- seq_len(nrow(centers))
 
+  # assign remaining IDs to nearest center with ordered tie-break
   remain_ids <- setdiff(data_clustering_adj$ID, optimal_states$ID)
   if (length(remain_ids)) {
     for (pid in remain_ids) {
       all_states_pid <- dplyr::filter(all_coef, ID == pid)
       best <- NULL
       for (cidx in seq_len(nrow(centers))) {
-        center <- as.numeric(centers[cidx, colnames(km_final$medoids), drop = TRUE])
-        pick <- pick_best_state(center, all_states_pid, timepos_option)  # UPDATED
+        center <- as.numeric(centers[cidx, num_cols, drop = TRUE])
+        if (any(!is.finite(center))) next
+        pick <- pick_best_state(center, all_states_pid, timepos_option, num_cols)
+        mind <- as.numeric(pick["mind"])
+        if (!is.finite(mind)) next
         rec <- data.frame(ID = pid, Cluster = cidx,
                           OptimalState = as.character(pick["state"]),
-                          MinDistance = as.numeric(pick["mind"]))
+                          MinDistance = mind)
         if (is.null(best) || rec$MinDistance < best$MinDistance) best <- rec
+      }
+      if (is.null(best)) { # fallback if all candidates invalid
+        best <- data.frame(ID = pid, Cluster = NA_integer_,
+                           OptimalState = "Original", MinDistance = Inf)
       }
       optimal_states <- rbind(optimal_states, best)
     }
   }
 
+  # map selected state -> shift number
   parse_shift <- function(state) {
     if (identical(state, "Original")) return(0)
-    as.numeric(trimws(sub("^Shift", "", state)))
+    as.numeric(trimws(sub("^Shift\\s*", "", state)))
   }
   shift_map <- setNames(vapply(optimal_states$OptimalState, parse_shift, numeric(1)), optimal_states$ID)
 
+  # recover time
   out <- data
   for (id in names(shift_map)) {
     sel <- out$ID == id
