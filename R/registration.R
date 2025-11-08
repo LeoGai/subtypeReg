@@ -44,7 +44,6 @@ SubtypeAware_Registration <- function(
   n_id <- length(ids)
   k_range <- .valid_k_range(k_range, n_id)
 
-  # tie-break for reps: Original, then Shift in the given timepos_option order
   pick_best_state <- function(center, df_all_states_one_id, timepos_option, num_cols) {
     cols <- num_cols
     lv <- c("Original", paste("Shift", timepos_option))
@@ -67,7 +66,6 @@ SubtypeAware_Registration <- function(
     calculate_bspline_coefficients(tmp, knots = knots, degree = degree, lambda = lambda)
   }
 
-  # template for coefficient names
   cf_template <- calculate_bspline_coefficients(
     data[data$ID == ids[1], , drop = FALSE],
     knots = knots, degree = degree, lambda = lambda
@@ -75,7 +73,6 @@ SubtypeAware_Registration <- function(
   coef_names <- names(cf_template)
   num_cols <- coef_names
 
-  # build coefficient table for Original + all shifts
   rows <- list()
   for (id in ids) {
     df_id <- data[data$ID == id, , drop = FALSE]
@@ -93,7 +90,6 @@ SubtypeAware_Registration <- function(
   base_coef <- dplyr::filter(all_coef, State == "Original")
   data_clustering <- base_coef[, num_cols, drop = FALSE]
 
-  # choose k by average silhouette on Original
   sil_vec <- numeric(length(k_range))
   for (i in seq_along(k_range)) {
     k <- k_range[i]
@@ -107,7 +103,6 @@ SubtypeAware_Registration <- function(
   km0 <- cluster::pam(data_clustering, k = optimal_k)
   base_coef$Cluster <- km0$clustering
 
-  # representatives (na.rm = TRUE to mirror prior behavior)
   selected_list <- list()
   for (k in seq_len(optimal_k)) {
     cd <- dplyr::filter(base_coef, Cluster == k)
@@ -116,7 +111,6 @@ SubtypeAware_Registration <- function(
     selected_list[[k]] <- cd[dists <= thr, , drop = FALSE]
   }
 
-  # initial best-state selection
   optimal_states <- data.frame(ID = base_coef$ID[0], Cluster = integer(0),
                                OptimalState = character(0), MinDistance = numeric(0))
   for (k in seq_len(optimal_k)) {
@@ -152,7 +146,6 @@ SubtypeAware_Registration <- function(
   }
   data_clustering_adj <- apply_best_back(base_coef, all_coef, optimal_states)
 
-  # legacy-like iteration/stopping rule
   iter_count     <- 0
   previous_k     <- optimal_k
   s_old          <- sil_vec
@@ -217,7 +210,6 @@ SubtypeAware_Registration <- function(
     data_clustering_adj <- apply_best_back(data_clustering_adj, all_coef, optimal_states)
   }
 
-  ## ---- 不做最终 PAM。用当前 Cluster 的均值中心 ----
   if (nrow(optimal_states) > 0) {
     centers_mean <- data_clustering_adj %>%
       dplyr::filter(ID %in% optimal_states$ID) %>%
@@ -235,13 +227,10 @@ SubtypeAware_Registration <- function(
     print(round(centers_mean[, c("Cluster", num_cols), drop = FALSE], 4))
   }
 
-  ## ---- 未选中点：按老函数的平手顺序 Original, Shift 1,2,3... ----
   remain_ids <- setdiff(data_clustering_adj$ID, optimal_states$ID)
   if (length(remain_ids)) {
     for (pid in remain_ids) {
       all_states_pid <- dplyr::filter(all_coef, ID == pid)[, c("State", num_cols), drop = FALSE]
-
-      # 平手顺序：Original 最优，其次 Shift 数值升序（1,2,3,...）
       ord_num <- suppressWarnings(as.numeric(gsub("^Shift\\s*", "", all_states_pid$State)))
       ord     <- ifelse(all_states_pid$State == "Original", -Inf, ord_num)
       all_states_pid <- all_states_pid[order(ord), , drop = FALSE]
