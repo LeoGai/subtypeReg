@@ -45,7 +45,7 @@ SubtypeAware_Registration <- function(
   n_id <- length(ids)
   k_range <- .valid_k_range(k_range, n_id)
 
-  # order-aware best-state picker (tie-break by caller's timepos_option order)
+  # order-aware best-state picker (NA-friendly; tie-break by timepos_option order)
   pick_best_state <- function(center, df_all_states_one_id, timepos_option, num_cols) {
     cols <- num_cols
     state_levels <- c("Original", paste("Shift", timepos_option))
@@ -56,12 +56,13 @@ SubtypeAware_Registration <- function(
     m  <- as.matrix(df_all_states_one_id[, cols, drop = FALSE])
     d2 <- rowSums((m - matrix(center, nrow = nrow(m), ncol = length(center), byrow = TRUE))^2)
 
-    d2[!is.finite(d2)] <- Inf
-    if (all(is.infinite(d2))) {
-      return(c(state = "Original", mind = Inf))
+    # --- 改动 1：老风格 NA 处理（保留 NA；which.min 会忽略 NA） ---
+    d2[!is.finite(d2)] <- NA_real_
+    if (all(is.na(d2))) {
+      return(c(state = "Original", mind = NA_real_))
     }
 
-    idx <- which.min(d2)  # order acts as deterministic tie-break
+    idx <- which.min(d2)  # which.min 忽略 NA；平局按行序（即我们的 State 顺序）
     c(state = as.character(df_all_states_one_id$State[idx]), mind = d2[idx])
   }
 
@@ -238,24 +239,20 @@ SubtypeAware_Registration <- function(
   }
   # ---------------- End legacy-like iteration rule ----------------
 
-  # ---- Final assignment for remaining IDs: USE MEAN CENTERS (legacy) instead of medoids ----
-  # 1) get final clustering labels
+  # ---- Final assignment for remaining IDs: USE MEAN CENTERS (legacy) ----
   km_final <- cluster::pam(data_clustering_adj[, num_cols, drop = FALSE], k = optimal_k)
   data_clustering_adj$Cluster <- km_final$clustering
 
-  # 2) compute mean centers using ONLY the IDs already in optimal_states (legacy behavior)
   if (nrow(optimal_states) > 0) {
     centers_mean <- data_clustering_adj %>%
       dplyr::filter(ID %in% optimal_states$ID) %>%
       dplyr::group_by(Cluster) %>%
       dplyr::summarise(dplyr::across(all_of(num_cols), ~ mean(.x, na.rm = TRUE)), .groups = "drop")
   } else {
-    # fallback: if no optimal_states exist (degenerate), use pam medoids to avoid crash
     centers_mean <- as.data.frame(km_final$medoids)
     centers_mean$Cluster <- seq_len(nrow(centers_mean))
   }
 
-  # 3) assign remaining IDs by nearest MEAN center with ordered tie-break among states
   remain_ids <- setdiff(data_clustering_adj$ID, optimal_states$ID)
   if (length(remain_ids)) {
     for (pid in remain_ids) {
@@ -266,20 +263,23 @@ SubtypeAware_Registration <- function(
         if (any(!is.finite(center_vec))) next
         pick <- pick_best_state(center_vec, all_states_pid, timepos_option, num_cols)
         mind <- as.numeric(pick["mind"])
-        if (!is.finite(mind)) next
+
+        # --- 改动 2：与老风格匹配——把“无效距离”视为 NA 并跳过 ---
+        if (is.na(mind)) next
+
         rec <- data.frame(ID = pid, Cluster = centers_mean$Cluster[cidx],
                           OptimalState = as.character(pick["state"]),
                           MinDistance = mind)
         if (is.null(best) || rec$MinDistance < best$MinDistance) best <- rec
       }
-      if (is.null(best)) { # fallback if all candidates invalid
+      if (is.null(best)) { # 极端兜底：全 NA 时保持可返回
         best <- data.frame(ID = pid, Cluster = NA_integer_,
-                           OptimalState = "Original", MinDistance = Inf)
+                           OptimalState = "Original", MinDistance = NA_real_)
       }
       optimal_states <- rbind(optimal_states, best)
     }
   }
-  # ---- End: legacy-style remaining assignment ----
+  # ---- End legacy-style remaining assignment ----
 
   # map selected state -> shift number
   parse_shift <- function(state) {
@@ -298,6 +298,7 @@ SubtypeAware_Registration <- function(
   rownames(out) <- NULL
   out
 }
+
 
 
 
