@@ -238,25 +238,36 @@ SubtypeAware_Registration <- function(
   }
   # ---------------- End legacy-like iteration rule ----------------
 
-  # final clustering to obtain centers for remaining assignment
+  # ---- Final assignment for remaining IDs: USE MEAN CENTERS (legacy) instead of medoids ----
+  # 1) get final clustering labels
   km_final <- cluster::pam(data_clustering_adj[, num_cols, drop = FALSE], k = optimal_k)
   data_clustering_adj$Cluster <- km_final$clustering
-  centers <- as.data.frame(km_final$medoids)
-  centers$Cluster <- seq_len(nrow(centers))
 
-  # assign remaining IDs to nearest center with ordered tie-break
+  # 2) compute mean centers using ONLY the IDs already in optimal_states (legacy behavior)
+  if (nrow(optimal_states) > 0) {
+    centers_mean <- data_clustering_adj %>%
+      dplyr::filter(ID %in% optimal_states$ID) %>%
+      dplyr::group_by(Cluster) %>%
+      dplyr::summarise(dplyr::across(all_of(num_cols), ~ mean(.x, na.rm = TRUE)), .groups = "drop")
+  } else {
+    # fallback: if no optimal_states exist (degenerate), use pam medoids to avoid crash
+    centers_mean <- as.data.frame(km_final$medoids)
+    centers_mean$Cluster <- seq_len(nrow(centers_mean))
+  }
+
+  # 3) assign remaining IDs by nearest MEAN center with ordered tie-break among states
   remain_ids <- setdiff(data_clustering_adj$ID, optimal_states$ID)
   if (length(remain_ids)) {
     for (pid in remain_ids) {
       all_states_pid <- dplyr::filter(all_coef, ID == pid)
       best <- NULL
-      for (cidx in seq_len(nrow(centers))) {
-        center <- as.numeric(centers[cidx, num_cols, drop = TRUE])
-        if (any(!is.finite(center))) next
-        pick <- pick_best_state(center, all_states_pid, timepos_option, num_cols)
+      for (cidx in seq_len(nrow(centers_mean))) {
+        center_vec <- as.numeric(centers_mean[cidx, num_cols, drop = TRUE])
+        if (any(!is.finite(center_vec))) next
+        pick <- pick_best_state(center_vec, all_states_pid, timepos_option, num_cols)
         mind <- as.numeric(pick["mind"])
         if (!is.finite(mind)) next
-        rec <- data.frame(ID = pid, Cluster = cidx,
+        rec <- data.frame(ID = pid, Cluster = centers_mean$Cluster[cidx],
                           OptimalState = as.character(pick["state"]),
                           MinDistance = mind)
         if (is.null(best) || rec$MinDistance < best$MinDistance) best <- rec
@@ -268,6 +279,7 @@ SubtypeAware_Registration <- function(
       optimal_states <- rbind(optimal_states, best)
     }
   }
+  # ---- End: legacy-style remaining assignment ----
 
   # map selected state -> shift number
   parse_shift <- function(state) {
@@ -286,5 +298,6 @@ SubtypeAware_Registration <- function(
   rownames(out) <- NULL
   out
 }
+
 
 
