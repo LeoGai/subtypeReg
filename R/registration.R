@@ -169,8 +169,7 @@ SubtypeAware_Registration <- function(
       sil_vec2[i] <- mean(sil[, "sil_width"])
     }
     if (verbose) {
-      cat("[SubtypeAware_Registration] iter", iter_count, "silhouette:",
-          paste(round(sil_vec2, 4), collapse = ", "), "\n")
+      print(sil_vec2, 4)
     }
 
     k2 <- k_range[which.max(sil_vec2)]
