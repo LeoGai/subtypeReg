@@ -1,4 +1,4 @@
-#' Compute B-spline coefficients using ridge regression (glmnet only)
+#' Compute B-spline coefficients using ridge regression
 #'
 #' @param data A data.frame with columns: ID, Time, Value
 #' @param knots Numeric vector of internal knot positions for splines::bs()
