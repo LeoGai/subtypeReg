@@ -1,7 +1,7 @@
 Package: subtypeReg
 Type: Package
-Title: Subtype-Aware Temporal Registration with Spline Coefficients
-Version: 0.1.1
+Title: Subtype-aware Registration of Longitudinal Data
+Version: 0.1.0
 Authors@R: c(person(given = "Xin", family = "Gai", role = c("aut","cre"), email = "xg.biostat@gmail.com"))
 Description: Temporal registration using B-spline coefficient embeddings and PAM clustering.
 License: MIT + file LICENSE
