@@ -47,10 +47,10 @@ SubtypeAware_Registration <- function(
   # tie-break by user-given order: Original, then Shift <timepos_option>
   pick_best_state <- function(center, df_all_states_one_id, timepos_option, num_cols) {
     cols <- num_cols
-    state_levels <- c("Original", paste("Shift", timepos_option))
-    df_all_states_one_id$State <- factor(df_all_states_one_id$State,
-                                         levels = state_levels, ordered = TRUE)
-    df_all_states_one_id <- df_all_states_one_id[order(df_all_states_one_id$State), , drop = FALSE]
+    shifts_num <- suppressWarnings(as.numeric(sub("^Shift\\s*", "", df_all_states_one_id$State)))
+    ord <- order(ifelse(df_all_states_one_id$State == "Original", -Inf, shifts_num))
+    df_all_states_one_id <- df_all_states_one_id[ord, , drop = FALSE]
+
     m  <- as.matrix(df_all_states_one_id[, cols, drop = FALSE])
     d2 <- rowSums((m - matrix(center, nrow = nrow(m), ncol = length(center), byrow = TRUE))^2)
     d2[!is.finite(d2)] <- NA_real_
