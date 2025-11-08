@@ -237,8 +237,6 @@ SubtypeAware_Registration <- function(
   }
 
   if (verbose) {
-    message("[SubtypeAware_Registration] final k = ", optimal_k)
-    message("[SubtypeAware_Registration] Centers (mean):")
     print(centers_mean)
   }
 
