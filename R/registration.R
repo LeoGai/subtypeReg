@@ -44,18 +44,20 @@ SubtypeAware_Registration <- function(
   n_id <- length(ids)
   k_range <- .valid_k_range(k_range, n_id)
 
+  # tie-break for reps: Original, then Shift in the given timepos_option order
   pick_best_state <- function(center, df_all_states_one_id, timepos_option, num_cols) {
     cols <- num_cols
-    shifts_num <- suppressWarnings(as.numeric(sub("^Shift\\s*", "", df_all_states_one_id$State)))
-    ord <- order(ifelse(df_all_states_one_id$State == "Original", -Inf, shifts_num))
-    df_all_states_one_id <- df_all_states_one_id[ord, , drop = FALSE]
+    lv <- c("Original", paste("Shift", timepos_option))
+    df <- df_all_states_one_id
+    df$State <- factor(df$State, levels = lv, ordered = TRUE)
+    df <- df[order(df$State), , drop = FALSE]
 
-    m  <- as.matrix(df_all_states_one_id[, cols, drop = FALSE])
+    m  <- as.matrix(df[, cols, drop = FALSE])
     d2 <- rowSums((m - matrix(center, nrow = nrow(m), ncol = length(center), byrow = TRUE))^2)
     d2[!is.finite(d2)] <- NA_real_
     if (all(is.na(d2))) return(c(state = "Original", mind = NA_real_))
-    idx <- which.min(d2)  # ignores NA; ties resolved by row order (our levels)
-    c(state = as.character(df_all_states_one_id$State[idx]), mind = d2[idx])
+    idx <- which.min(d2)
+    c(state = as.character(df$State[idx]), mind = d2[idx])
   }
 
   get_coef_one <- function(df_id, shift = NULL) {
@@ -65,6 +67,7 @@ SubtypeAware_Registration <- function(
     calculate_bspline_coefficients(tmp, knots = knots, degree = degree, lambda = lambda)
   }
 
+  # template for coefficient names
   cf_template <- calculate_bspline_coefficients(
     data[data$ID == ids[1], , drop = FALSE],
     knots = knots, degree = degree, lambda = lambda
@@ -72,6 +75,7 @@ SubtypeAware_Registration <- function(
   coef_names <- names(cf_template)
   num_cols <- coef_names
 
+  # build coefficient table for Original + all shifts
   rows <- list()
   for (id in ids) {
     df_id <- data[data$ID == id, , drop = FALSE]
@@ -89,6 +93,7 @@ SubtypeAware_Registration <- function(
   base_coef <- dplyr::filter(all_coef, State == "Original")
   data_clustering <- base_coef[, num_cols, drop = FALSE]
 
+  # choose k by average silhouette on Original
   sil_vec <- numeric(length(k_range))
   for (i in seq_along(k_range)) {
     k <- k_range[i]
@@ -96,14 +101,13 @@ SubtypeAware_Registration <- function(
     sil <- cluster::silhouette(km$clustering, stats::dist(data_clustering))
     sil_vec[i] <- mean(sil[, "sil_width"])
   }
-  if (verbose) {
-    print(sil_vec)
-  }
+  if (verbose) print(sil_vec)
 
   optimal_k <- k_range[which.max(sil_vec)]
   km0 <- cluster::pam(data_clustering, k = optimal_k)
   base_coef$Cluster <- km0$clustering
-                               
+
+  # representatives (na.rm = TRUE to mirror prior behavior)
   selected_list <- list()
   for (k in seq_len(optimal_k)) {
     cd <- dplyr::filter(base_coef, Cluster == k)
@@ -112,6 +116,7 @@ SubtypeAware_Registration <- function(
     selected_list[[k]] <- cd[dists <= thr, , drop = FALSE]
   }
 
+  # initial best-state selection
   optimal_states <- data.frame(ID = base_coef$ID[0], Cluster = integer(0),
                                OptimalState = character(0), MinDistance = numeric(0))
   for (k in seq_len(optimal_k)) {
@@ -147,6 +152,7 @@ SubtypeAware_Registration <- function(
   }
   data_clustering_adj <- apply_best_back(base_coef, all_coef, optimal_states)
 
+  # legacy-like iteration/stopping rule
   iter_count     <- 0
   previous_k     <- optimal_k
   s_old          <- sil_vec
@@ -161,9 +167,7 @@ SubtypeAware_Registration <- function(
       sil <- cluster::silhouette(km$clustering, stats::dist(data_clustering_adj[, num_cols, drop = FALSE]))
       sil_vec2[i] <- mean(sil[, "sil_width"])
     }
-    if (verbose) {
-      print(sil_vec2)
-    }
+    if (verbose) print(sil_vec2)
 
     k2 <- k_range[which.max(sil_vec2)]
     top2_new <- sort(sil_vec2, decreasing = TRUE)[1:2]
@@ -213,21 +217,16 @@ SubtypeAware_Registration <- function(
     data_clustering_adj <- apply_best_back(data_clustering_adj, all_coef, optimal_states)
   }
 
+  ## ---- 不做最终 PAM。用当前 Cluster 的均值中心 ----
   if (nrow(optimal_states) > 0) {
     centers_mean <- data_clustering_adj %>%
       dplyr::filter(ID %in% optimal_states$ID) %>%
       dplyr::group_by(Cluster) %>%
-      dplyr::summarise(
-        dplyr::across(all_of(num_cols), ~ mean(.x, na.rm = TRUE)),
-        .groups = "drop"
-      )
+      dplyr::summarise(dplyr::across(all_of(num_cols), ~ mean(.x, na.rm = TRUE)), .groups = "drop")
   } else {
     centers_mean <- data_clustering_adj %>%
       dplyr::group_by(Cluster) %>%
-      dplyr::summarise(
-        dplyr::across(all_of(num_cols), ~ mean(.x, na.rm = TRUE)),
-        .groups = "drop"
-      )
+      dplyr::summarise(dplyr::across(all_of(num_cols), ~ mean(.x, na.rm = TRUE)), .groups = "drop")
   }
 
   if (isTRUE(verbose)) {
@@ -236,20 +235,34 @@ SubtypeAware_Registration <- function(
     print(round(centers_mean[, c("Cluster", num_cols), drop = FALSE], 4))
   }
 
+  ## ---- 未选中点：按老函数的平手顺序 Original, Shift 1,2,3... ----
   remain_ids <- setdiff(data_clustering_adj$ID, optimal_states$ID)
   if (length(remain_ids)) {
     for (pid in remain_ids) {
-      all_states_pid <- dplyr::filter(all_coef, ID == pid)
+      all_states_pid <- dplyr::filter(all_coef, ID == pid)[, c("State", num_cols), drop = FALSE]
+
+      # 平手顺序：Original 最优，其次 Shift 数值升序（1,2,3,...）
+      ord_num <- suppressWarnings(as.numeric(gsub("^Shift\\s*", "", all_states_pid$State)))
+      ord     <- ifelse(all_states_pid$State == "Original", -Inf, ord_num)
+      all_states_pid <- all_states_pid[order(ord), , drop = FALSE]
+
       best <- NULL
       for (cidx in seq_len(nrow(centers_mean))) {
         center_vec <- as.numeric(centers_mean[cidx, num_cols, drop = TRUE])
         if (any(!is.finite(center_vec))) next
-        pick <- pick_best_state(center_vec, all_states_pid, timepos_option, num_cols)
-        mind <- as.numeric(pick["mind"])
-        if (is.na(mind)) next
-        rec <- data.frame(ID = pid, Cluster = centers_mean$Cluster[cidx],
-                          OptimalState = as.character(pick["state"]),
-                          MinDistance = mind)
+
+        M  <- as.matrix(all_states_pid[, num_cols, drop = FALSE])
+        d2 <- rowSums((M - matrix(center_vec, nrow = nrow(M), ncol = length(center_vec), byrow = TRUE))^2)
+
+        if (all(!is.finite(d2))) next
+        j <- which.min(replace(d2, !is.finite(d2), Inf))
+
+        rec <- data.frame(
+          ID = pid,
+          Cluster = centers_mean$Cluster[cidx],
+          OptimalState = as.character(all_states_pid$State[j]),
+          MinDistance = as.numeric(d2[j])
+        )
         if (is.null(best) || rec$MinDistance < best$MinDistance) best <- rec
       }
       if (is.null(best)) {
