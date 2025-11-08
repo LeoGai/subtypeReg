@@ -101,7 +101,7 @@ SubtypeAware_Registration <- function(
     sil_vec[i] <- mean(sil[, "sil_width"])
   }
   if (verbose) {
-    cat("[SubtypeAware_Registration] initial silhouette:", paste(round(sil_vec, 4), collapse = ", "), "\n")
+    print(sil_vec)
   }
 
   optimal_k <- k_range[which.max(sil_vec)]
