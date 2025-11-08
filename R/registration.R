@@ -45,10 +45,16 @@ SubtypeAware_Registration <- function(
   n_id <- length(ids)
   k_range <- .valid_k_range(k_range, n_id)
 
-  # order-aware best-state picker (NA-friendly; tie-break by timepos_option order)
+  # tie-break order: Original, then Shift 1,2,3,... (numeric ascending)
+  .state_levels <- function(timepos_option) {
+    sh <- sort(unique(as.numeric(timepos_option)))
+    c("Original", paste("Shift", sh))
+  }
+
+  # order-aware best-state picker (NA-friendly; tie-break by numeric ascending shifts)
   pick_best_state <- function(center, df_all_states_one_id, timepos_option, num_cols) {
     cols <- num_cols
-    state_levels <- c("Original", paste("Shift", timepos_option))
+    state_levels <- .state_levels(timepos_option)
     df_all_states_one_id$State <- factor(df_all_states_one_id$State,
                                          levels = state_levels, ordered = TRUE)
     df_all_states_one_id <- df_all_states_one_id[order(df_all_states_one_id$State), , drop = FALSE]
@@ -99,7 +105,9 @@ SubtypeAware_Registration <- function(
   all_coef$ID <- if (is.numeric(all_coef$ID)) as.numeric(all_coef$ID) else all_coef$ID
   all_coef[num_cols] <- lapply(all_coef[num_cols], function(x) as.numeric(x))
 
+  # ---------- Initial PAM (fixed row order to stabilize medoids) ----------
   base_coef <- dplyr::filter(all_coef, State == "Original")
+  base_coef <- dplyr::arrange(base_coef, ID)  # NEW: fix order by ID
   data_clustering <- base_coef[, num_cols, drop = FALSE]
 
   # choose k by average silhouette
@@ -121,11 +129,11 @@ SubtypeAware_Registration <- function(
   for (k in seq_len(optimal_k)) {
     cd <- dplyr::filter(base_coef, Cluster == k)
     dists <- sqrt(rowSums((cd[, num_cols, drop = FALSE] - km0$medoids[k, ])^2))
-    thr <- stats::quantile(dists, alpha)  # CHANGED: removed na.rm = TRUE
+    thr <- stats::quantile(dists, alpha)  # legacy: no na.rm
     selected_list[[k]] <- cd[dists <= thr, , drop = FALSE]
   }
 
-  # initial best-state selection with tie-break by timepos_option
+  # initial best-state selection
   optimal_states <- data.frame(ID = base_coef$ID[0], Cluster = integer(0), OptimalState = character(0), MinDistance = numeric(0))
   for (k in seq_len(optimal_k)) {
     repeat {
@@ -174,6 +182,9 @@ SubtypeAware_Registration <- function(
   repeat {
     iter_count <- iter_count + 1
 
+    # NEW: fix order by ID before each PAM to stabilize medoids
+    data_clustering_adj <- dplyr::arrange(data_clustering_adj, ID)
+
     sil_vec2 <- numeric(length(k_range))
     for (i in seq_along(k_range)) {
       k <- k_range[i]
@@ -203,7 +214,7 @@ SubtypeAware_Registration <- function(
     for (k in seq_len(optimal_k)) {
       cd <- dplyr::filter(data_clustering_adj, Cluster == k)
       dists <- sqrt(rowSums((cd[, num_cols, drop = FALSE] - km2$medoids[k, ])^2))
-      thr <- stats::quantile(dists, alpha)  # CHANGED: removed na.rm = TRUE
+      thr <- stats::quantile(dists, alpha)  # legacy: no na.rm
       selected_list[[k]] <- cd[dists <= thr, , drop = FALSE]
     }
 
@@ -240,6 +251,7 @@ SubtypeAware_Registration <- function(
   # ---------------- End legacy-like iteration rule ----------------
 
   # ---- Final assignment for remaining IDs: USE MEAN CENTERS (legacy) ----
+  data_clustering_adj <- dplyr::arrange(data_clustering_adj, ID)  # keep order stable
   km_final <- cluster::pam(data_clustering_adj[, num_cols, drop = FALSE], k = optimal_k)
   data_clustering_adj$Cluster <- km_final$clustering
 
@@ -263,9 +275,7 @@ SubtypeAware_Registration <- function(
         if (any(!is.finite(center_vec))) next
         pick <- pick_best_state(center_vec, all_states_pid, timepos_option, num_cols)
         mind <- as.numeric(pick["mind"])
-
-        # legacy-like: treat invalid distance as NA and skip
-        if (is.na(mind)) next
+        if (is.na(mind)) next  # legacy-like: skip NA distances
 
         rec <- data.frame(ID = pid, Cluster = centers_mean$Cluster[cidx],
                           OptimalState = as.character(pick["state"]),
