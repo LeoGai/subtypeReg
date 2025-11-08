@@ -19,7 +19,8 @@ if (getRversion() >= "2.15.1") utils::globalVariables(c("State","Cluster","ID","
 #' @param knots numeric, internal knots for splines::bs
 #' @param degree integer, spline degree, default 3
 #' @param lambda numeric, glmnet ridge lambda, default 1e-7
-#' @param verbose logical, print silhouette vectors if TRUE
+#' @param verbose logical, print silhouettes and centers if TRUE
+#'
 #' @return data.frame with registered Time within [tmin, tmax]
 #' @import dplyr
 #' @importFrom cluster pam silhouette
@@ -65,6 +66,7 @@ SubtypeAware_Registration <- function(
     calculate_bspline_coefficients(tmp, knots = knots, degree = degree, lambda = lambda)
   }
 
+  # template for coefficient names
   cf_template <- calculate_bspline_coefficients(
     data[data$ID == ids[1], , drop = FALSE],
     knots = knots, degree = degree, lambda = lambda
@@ -72,7 +74,7 @@ SubtypeAware_Registration <- function(
   coef_names <- names(cf_template)
   num_cols <- coef_names
 
-  # build coefficient table
+  # build coefficient table for Original + all shifts
   rows <- list()
   for (id in ids) {
     df_id <- data[data$ID == id, , drop = FALSE]
@@ -90,7 +92,7 @@ SubtypeAware_Registration <- function(
   base_coef <- dplyr::filter(all_coef, State == "Original")
   data_clustering <- base_coef[, num_cols, drop = FALSE]
 
-  # choose k by average silhouette
+  # choose k by average silhouette on Original
   sil_vec <- numeric(length(k_range))
   for (i in seq_along(k_range)) {
     k <- k_range[i]
@@ -98,13 +100,15 @@ SubtypeAware_Registration <- function(
     sil <- cluster::silhouette(km$clustering, stats::dist(data_clustering))
     sil_vec[i] <- mean(sil[, "sil_width"])
   }
-  if (verbose) print(sil_vec)
+  if (verbose) {
+    cat("[SubtypeAware_Registration] initial silhouette:", paste(round(sil_vec, 4), collapse = ", "), "\n")
+  }
 
   optimal_k <- k_range[which.max(sil_vec)]
   km0 <- cluster::pam(data_clustering, k = optimal_k)
   base_coef$Cluster <- km0$clustering
 
-  # representatives (keep your previous matching behavior: na.rm = TRUE)
+  # representatives (na.rm = TRUE to mirror prior behavior)
   selected_list <- list()
   for (k in seq_len(optimal_k)) {
     cd <- dplyr::filter(base_coef, Cluster == k)
@@ -149,7 +153,7 @@ SubtypeAware_Registration <- function(
   }
   data_clustering_adj <- apply_best_back(base_coef, all_coef, optimal_states)
 
-  # Legacy-like iteration rule (your original stopping logic)
+  # legacy-like iteration/stopping rule
   iter_count     <- 0
   previous_k     <- optimal_k
   s_old          <- sil_vec
@@ -164,7 +168,10 @@ SubtypeAware_Registration <- function(
       sil <- cluster::silhouette(km$clustering, stats::dist(data_clustering_adj[, num_cols, drop = FALSE]))
       sil_vec2[i] <- mean(sil[, "sil_width"])
     }
-    if (verbose) print(sil_vec2)
+    if (verbose) {
+      cat("[SubtypeAware_Registration] iter", iter_count, "silhouette:",
+          paste(round(sil_vec2, 4), collapse = ", "), "\n")
+    }
 
     k2 <- k_range[which.max(sil_vec2)]
     top2_new <- sort(sil_vec2, decreasing = TRUE)[1:2]
@@ -180,7 +187,6 @@ SubtypeAware_Registration <- function(
     km2 <- cluster::pam(data_clustering_adj[, num_cols, drop = FALSE], k = optimal_k)
     data_clustering_adj$Cluster <- km2$clustering
 
-    # re-select representatives (keep na.rm = TRUE for matching)
     selected_list <- list()
     for (k in seq_len(optimal_k)) {
       cd <- dplyr::filter(data_clustering_adj, Cluster == k)
@@ -189,7 +195,6 @@ SubtypeAware_Registration <- function(
       selected_list[[k]] <- cd[dists <= thr, , drop = FALSE]
     }
 
-    # re-choose best state
     optimal_states <- optimal_states[0, ]
     for (k in seq_len(optimal_k)) {
       repeat {
@@ -216,10 +221,11 @@ SubtypeAware_Registration <- function(
     data_clustering_adj <- apply_best_back(data_clustering_adj, all_coef, optimal_states)
   }
 
-  # Final assignment for remaining IDs: use MEAN centers (legacy)
+  # Final clustering and centers
   km_final <- cluster::pam(data_clustering_adj[, num_cols, drop = FALSE], k = optimal_k)
   data_clustering_adj$Cluster <- km_final$clustering
 
+  # mean centers used for remaining assignment
   if (nrow(optimal_states) > 0) {
     centers_mean <- data_clustering_adj %>%
       dplyr::filter(ID %in% optimal_states$ID) %>%
@@ -228,8 +234,21 @@ SubtypeAware_Registration <- function(
   } else {
     centers_mean <- as.data.frame(km_final$medoids)
     centers_mean$Cluster <- seq_len(nrow(centers_mean))
+    centers_mean <- centers_mean[, c("Cluster", num_cols), drop = FALSE]
   }
 
+  # print centers if verbose = TRUE
+  if (isTRUE(verbose)) {
+    centers_medoid <- as.data.frame(km_final$medoids)
+    centers_medoid$Cluster <- seq_len(nrow(centers_medoid))
+    centers_medoid <- centers_medoid[, c("Cluster", num_cols), drop = FALSE]
+
+    cat("[SubtypeAware_Registration] final k =", optimal_k, "\n")
+    cat("[SubtypeAware_Registration] Centers (mean):\n")
+    print(round(centers_mean[, c("Cluster", num_cols), drop = FALSE], 4))
+  }
+
+  # Remaining assignment using mean centers
   remain_ids <- setdiff(data_clustering_adj$ID, optimal_states$ID)
   if (length(remain_ids)) {
     for (pid in remain_ids) {
@@ -267,8 +286,10 @@ SubtypeAware_Registration <- function(
   }
   out <- out[out$Time >= tmin & out$Time <= tmax, , drop = FALSE]
   rownames(out) <- NULL
+
   out
 }
+
 
 
 
