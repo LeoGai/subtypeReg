@@ -32,7 +32,8 @@ SubtypeAware_Registration(
   \item{knots}{Numeric vector of internal knot positions passed to \code{splines::bs}.}
   \item{degree}{Integer spline degree passed to \code{splines::bs}; default is \code{3}.}
   \item{lambda}{Numeric ridge penalty passed to \code{glmnet}; default is \code{1e-7}.}
-  \item{verbose}{Logical; if \code{TRUE} prints the silhouette vectors each time they are computed.}
+  \item{verbose}{Logical; if \code{TRUE}, prints silhouette vectors at each iteration and the final
+  selected \code{k} and cluster centers (means).}
 }
 \value{
 A \code{data.frame} of the same structure as \code{data}, with \code{Time} adjusted (registered) and
@@ -44,7 +45,8 @@ candidate shift in \code{timepos_option}. Baseline coefficients (\code{Original}
 \code{cluster::pam}; representative subjects per cluster are selected by a quantile cutoff \code{alpha}.
 For each selected subject, the best state (shift) is chosen by minimizing squared distance to the local
 cluster center; ties are broken by the order of \code{timepos_option} (with \code{Original} first).
-Optionally, an iterative refinement updates clusters and selections until a stopping condition.
+An optional iterative refinement updates clusters and selections until the stopping rule is met:
+no change in \code{k} and no improvement in the top-two silhouette scores, or the iteration limit is reached.
 }
 \examples{
 set.seed(1)
@@ -71,3 +73,4 @@ out <- SubtypeAware_Registration(
 
 head(out)
 }
+
