@@ -1,6 +1,6 @@
 \name{SubtypeAware_Registration}
 \alias{SubtypeAware_Registration}
-\title{Subtype-aware temporal registration via spline-coefficient clustering}
+\title{Subtype-aware Registration of Longitudinal Data}
 \description{
 Registers subject-specific time axes by fitting spline coefficients under multiple temporal shifts,
 clustering baseline coefficients, selecting representative subjects, and choosing the best shift per subject
