@@ -1,0 +1,6 @@
+export(SubtypeAware_Registration)
+import(dplyr)
+importFrom(cluster, pam, silhouette)
+importFrom(splines, bs)
+importFrom(glmnet, glmnet)
+importFrom(stats, dist, quantile, setNames, coef)
