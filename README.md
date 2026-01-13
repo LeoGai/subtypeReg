@@ -2,7 +2,7 @@
 
 **An R Package for Subtype-Aware Registration of Longitudinal Electronic Health Records.**
 
-The source code used to reproduce the analyses in this paper https://www.tandfonline.com/doi/full/10.1080/01621459.2026.2613464) can be found at https://github.com/LeoGai/EHR-registration-subtype.
+The source code used to reproduce the analyses in this paper https://www.tandfonline.com/doi/full/10.1080/01621459.2026.2613464 can be found at https://github.com/LeoGai/EHR-registration-subtype.
 
 ## Installation
 
