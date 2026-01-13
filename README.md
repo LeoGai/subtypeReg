@@ -1,6 +1,8 @@
 # subtypeReg
 
-Subtype-Aware Registration of Longitudinal Electronic Health Records.
+**An R Package for Subtype-Aware Registration of Longitudinal Electronic Health Records.**
+
+The source code used to reproduce the analyses in this paper \url{https://www.tandfonline.com/doi/full/10.1080/01621459.2026.2613464)} can be found at \url{https://github.com/LeoGai/EHR-registration-subtype}.
 
 ## Installation
 
